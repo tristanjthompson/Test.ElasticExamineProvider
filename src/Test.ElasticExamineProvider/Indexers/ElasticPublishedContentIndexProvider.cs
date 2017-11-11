@@ -23,7 +23,6 @@ namespace Test.ElasticExamineProvider.Indexers
         private static bool IsMaster = Convert.ToBoolean(ConfigurationManager.AppSettings["ElasticSearchProvider:IsMaster"] ?? "true");
         private static string _elasticConnectionString = ConfigurationManager.AppSettings["ElasticSearchProvider:ConnectionString"] ?? "http://localhost:9200";
 
-        // TODO: it's correct that this is static, however, as we've set a default index/doctype against it, then this won't work if this provider is used for multiple indexes - consider how to make it thread-safe
         private static Nest.IElasticClient _elasticClient = null;
 
         private readonly UmbracoHelper _umbracoHelper;
