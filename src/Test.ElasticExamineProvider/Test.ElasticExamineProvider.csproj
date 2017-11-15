@@ -217,10 +217,12 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="DocumentTypes\PublishedContentItem.cs" />
-    <Compile Include="Indexers\ElasticPublishedContentIndexProvider.cs" />
+    <Compile Include="DocumentTypes\PublishedContent.cs" />
+    <Compile Include="ElasticSearchResult.cs" />
+    <Compile Include="Indexers\DefaultPublishedContentIndexer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Searchers\ElasticPublishedContentIndexSearcher.cs" />
+    <Compile Include="Searchers\DefaultPublishedContentSearcher.cs" />
+    <Compile Include="ElasticSearchResults.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config">
