@@ -6,7 +6,7 @@ using Nest;
 namespace Test.ElasticExamineProvider.DocumentTypes
 {
     [ElasticsearchType(Name = DocumentTypeName)]
-    public class PublishedContentItem
+    public class PublishedContent
     {
         public const string DocumentTypeName = "content";  
         public int Id { get; set; }
@@ -17,7 +17,12 @@ namespace Test.ElasticExamineProvider.DocumentTypes
         public string Url { get; set; }
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
-        public PublishedContentItem(IPublishedContent item)
+        public PublishedContent()
+        {
+
+        }
+
+        public PublishedContent(IPublishedContent item)
         {
             Id = item.Id;
             DocumentTypeAlias = item.DocumentTypeAlias;

@@ -13,30 +13,31 @@ using Test.ElasticExamineProvider.DocumentTypes;
 
 namespace Test.ElasticExamineProvider.Indexers
 {
-    public class ElasticPublishedContentIndexProvider : UmbracoExamine.BaseUmbracoIndexer
+    public class DefaultPublishedContentIndexer : UmbracoExamine.BaseUmbracoIndexer
     {
-        private string IndexName { get { return this.Name.ToLower(); } }
+        private string _indexName { get { return this.IndexSetName.ToLower(); } }
 
         /// <summary>
         /// If used in a load-balanced environment, this will stop bulk actions from running on anything but a nominated "Master" node
         /// </summary>
-        private static bool IsMaster = Convert.ToBoolean(ConfigurationManager.AppSettings["ElasticSearchProvider:IsMaster"] ?? "true");
+        private static bool _isMaster = Convert.ToBoolean(ConfigurationManager.AppSettings["ElasticSearchProvider:IsMaster"] ?? "true");
         private static string _elasticConnectionString = ConfigurationManager.AppSettings["ElasticSearchProvider:ConnectionString"] ?? "http://localhost:9200";
 
         private static Nest.IElasticClient _elasticClient = null;
+        private static log4net.ILog _logger = null;
 
         private readonly UmbracoHelper _umbracoHelper;
-        private readonly log4net.ILog _logger;
 
-        // let Umbraco know that we support content (as opposed to media, etc.)
-        private static List<string> _supportedTypes = new List<string>() { PublishedContentItem.DocumentTypeName };
+        // let Umbraco know that we only support content (as opposed to media, etc.)
+        private static List<string> _supportedTypes = new List<string>() { UmbracoExamine.IndexTypes.Content };
 
         protected override IEnumerable<string> SupportedTypes => _supportedTypes;
 
-        public ElasticPublishedContentIndexProvider()
+        public DefaultPublishedContentIndexer()
         {
-            _logger = log4net.LogManager.GetLogger(this.GetType());
-            _logger.Info("Constructor call");
+            if(_logger == null)
+                _logger = log4net.LogManager.GetLogger(this.GetType());
+
             _umbracoHelper = new UmbracoHelper(UmbracoContext.Current);
         }
         
@@ -45,7 +46,7 @@ namespace Test.ElasticExamineProvider.Indexers
         {
             base.Initialize(name, config);
 
-            _logger.Info($"Initialize: name = {name}, IndexName: {IndexName}");
+            _logger.Info($"Initialize: name = {name}, IndexName: {_indexName}");
 
             if (config.Keys.Count == 0)
             {
@@ -60,55 +61,40 @@ namespace Test.ElasticExamineProvider.Indexers
                 }
             }
 
-            InitElasticClient(IndexName);
-        }
-
-        private void ElasticPublishedContentIndexProvider_IgnoringNode(object sender, IndexingNodeDataEventArgs e)
-        {
-            _logger.Info($"IgnoringNode() {e.NodeId}");
-        }
-
-        protected override void OnNodeIndexed(IndexedNodeEventArgs e)
-        {
-            _logger.Info($"OnNodeIndexed() {e.NodeId}");
-            base.OnNodeIndexed(e);
-        }
-
-        public override void DeleteFromIndex(string nodeId)
-        {
-            _logger.Info("DeleteFromIndex() - " + nodeId);
-
-            var result = _elasticClient.Delete(new DeleteRequest(IndexName, PublishedContentItem.DocumentTypeName, nodeId));
-
-            _logger.Info("DeleteFromIndex() - Result: " + result.IsValid);
-        }
-
-        public override void IndexAll(string type)
-        {
-            _logger.Info("IndexAll() - " + type);
-
-            if (!IsMaster || !_supportedTypes.Contains(type))
-                return;
-
-            RebuildIndex();
+            InitElasticClient(_indexName);
         }
 
         public override bool IndexExists()
         {
             _logger.Info("IndexExists()");
-            if (!IsMaster)
+            if (!_isMaster)
                 return true;
 
-            var result = _elasticClient.IndexExists(IndexName);
+            var result = _elasticClient.IndexExists(_indexName);
 
             _logger.Info($"IndexExists() = {result.Exists}");
 
             return result.Exists;
         }
 
-        public override void RebuildIndex()
+        public override void IndexAll(string type)
         {
-            if (!IsMaster)
+            _logger.Info("IndexAll() - " + type);
+
+            if (!_isMaster || !_supportedTypes.Contains(type))
+                return;
+
+            BuildIndex(dropIndexFirst: false);
+        }
+
+        public override void RebuildIndex()
+        { 
+            BuildIndex(dropIndexFirst: true);
+        }
+
+        private void BuildIndex(bool dropIndexFirst)
+        {
+            if (!_isMaster)
             {
                 _logger.Info("RebuildIndex() - not run as not on master node");
                 return;
@@ -119,25 +105,27 @@ namespace Test.ElasticExamineProvider.Indexers
             var timer = new System.Diagnostics.Stopwatch();
             timer.Start();
 
-            // TODO: consider when this is appropriate - maybe only when index doesn't exist?
-            // drop all indexes
-            _elasticClient.DeleteIndex(IndexName);
+            // TODO: consider when it's appropriate to drop the index
+            if (dropIndexFirst)
+            {
+                _elasticClient.DeleteIndex(_indexName);
+            }
 
             // loop through all content and index it
             var items = GetAllContent();
             _logger.Info($"RebuildIndex() - {items.Count} nodes found to index");
 
-            var searchItems = new List<PublishedContentItem>();
+            var searchItems = new List<PublishedContent>();
             foreach (var item in items)
             {
-                searchItems.Add(new PublishedContentItem(item));
+                searchItems.Add(new PublishedContent(item));
             }
 
-            // TODO: send up in batches (of 1000?) instead of all at once in case of large data sets
+            // TODO: send up in batches (of 1000?) asynchronously in case large chunks of data causes issues
             _logger.Info($"Indexing {searchItems.Count} nodes");
             var addToIndexTasks = new List<System.Threading.Tasks.Task>
             {
-                _elasticClient.IndexManyAsync(searchItems, IndexName)
+                _elasticClient.IndexManyAsync(searchItems, _indexName)
             };
 
             // wait for all the indexing to finish
@@ -148,15 +136,25 @@ namespace Test.ElasticExamineProvider.Indexers
             _logger.Info($"RebuildIndex() - finished indexing {items.Count} nodes in {timer.Elapsed.TotalSeconds} seconds");
         }
 
+        public override void DeleteFromIndex(string nodeId)
+        {
+            _logger.Info("DeleteFromIndex() - " + nodeId);
+
+            var result = _elasticClient.Delete(new DeleteRequest(_indexName, PublishedContent.DocumentTypeName, nodeId));
+
+            _logger.Info("DeleteFromIndex() - Result: " + result.IsValid);
+        }
+        
         public override void ReIndexNode(XElement node, string type)
         {
             var idAttribute = node.Attribute(XName.Get("id"));
             _logger.Info($"ReIndexNode(type: {type}, nodeId: {idAttribute?.Value}");
 
-            if (!IsMaster)
+            if (!_isMaster)
                 return;
 
-            // load up the node value and index it
+            // Cheat!  Load up the published node value and index it
+            // TODO: figure out whether this is a good idea and look at how/why Examine parses the XElement instead of doing this
             var nodeToIndex = _umbracoHelper.TypedContent(idAttribute?.Value);
             if (nodeToIndex == null)
             {
@@ -165,20 +163,14 @@ namespace Test.ElasticExamineProvider.Indexers
             }
 
             // index the node
-            var indexResult = _elasticClient.Index(new PublishedContentItem(nodeToIndex), x=> x.Index(IndexName));
+            var indexResult = _elasticClient.Index(new PublishedContent(nodeToIndex), x=> x.Index(_indexName));
 
             _logger.Info($"Reindexed ({nodeToIndex.Id}) {nodeToIndex.Name} - Success? {indexResult.IsValid}");
         }
-
-        // ******************************************
-        // ******* private helper methods ***********
-        // ******************************************
-
-
-        private void InitElasticClient(string indexName)
+        public static IElasticClient InitElasticClient(string indexName)
         {
             if (_elasticClient != null)
-                return;
+                return _elasticClient;
 
             _logger.Info("InitElasticClient() - start");
             _elasticClient = new Nest.ElasticClient(
@@ -189,7 +181,14 @@ namespace Test.ElasticExamineProvider.Indexers
                 )
             );
             _logger.Info("InitElasticClient() - done");
+
+
+            return _elasticClient;
         }
+
+        // ******************************************
+        // ******* PRIVATE HELPER METHODS ***********
+        // ******************************************
 
         private List<IPublishedContent> GetAllContent()
         {
